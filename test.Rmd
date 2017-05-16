@@ -1,0 +1,87 @@
+---
+title: "Classifying Quality of Exercise Repetitions from Movement Data"
+author: "Joseph Christopher Lavell"
+date: "May 2, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+The data for this project come from the following source: <http://groupware.les.inf.puc-rio.br/har>. The study "Qualitative Activity Recognition of Weight Lifting Exercises" by Velloso, E. et al uses a prediction algorithm to determine the quality of exectution of the dumbell bicep curls.
+This data represents measurements taken by motion sensors on 6 subjects as they performed sets of 10 repetitions of the exercise.
+
+First the training data and test data are downloaded and loaded into r as two separate data frames. To make removing unwanted columns easier in a later step, we treat blank cells as missing values.
+
+
+```{r,cache=TRUE}
+if(!file.exists("./train.csv")) {
+        trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+        testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+        download.file(trainURL,destfile = "train.csv", method="curl")
+        download.file(testURL,destfile = "test.csv", method="curl")
+}
+training <- read.csv("./train.csv",stringsAsFactors = TRUE,na.strings=c("","NA"))
+testing <- read.csv("./test.csv",stringsAsFactors = TRUE,na.strings=c("","NA"))
+```
+The paper from which this data was obtained had a prediction algorithm that predicted over varying intervals of time (windows), however the testing data provided for this assignment seems to be a random set of instantaneous data points. Therefore, our prediction model has to be trained on individual points. There are some variables in the dataset that seem to be features created by the analysts for their window algorithm method as noted in section 5.1 of the paper. They are values obtained over windows, so they cannot be used for instantaneous points. We'll remove them from the dataset and make a prediction with the rest of the variables using the random forest method. This method was chosen as the data is non-linear and the dataset is not particularly large, so computation time is not an issue.
+
+```{r}
+suppressMessages(library(randomForest))
+suppressMessages(library(caret))
+library(knitr)
+
+```
+
+```{r,cache=TRUE}
+training1 <- training[,colSums(is.na(training))==0]
+testing1 <- testing[,colSums(is.na(training))==0]
+set.seed(485)
+inTrain <- createDataPartition(y=training1$classe, p=0.7, list=FALSE)
+traintrain <- training1[inTrain,]
+traintest <- training1[-inTrain,]
+mod <- randomForest(x=traintrain[,1:ncol(traintrain)-1], y=traintrain[,ncol(traintrain)])
+preds <- predict(mod,newdata = traintest[,-ncol(traintrain)])
+```
+
+```{r table1}
+kable(confusionMatrix(preds,traintest$classe)$table,format="html",
+      caption = "Figure 1: Confusion Matrix of initial model")
+```
+
+This has accurate results. It does contain as features, however, the timestamp and usernames, which are not predictors that will generalize well out of sample. Removing the timestamp and user name information along with the X column (row numbers) we're left with the raw measurement data. We then can make a new model with only these data as predictors.
+
+```{r,cache=TRUE}
+remove <- -c(1,2,grep("raw",names(training1)),grep("cvtd",names(training1)),
+                grep("window",names(training)))
+training2 <- training1[,remove]
+testing2 <- testing1[,remove]
+set.seed(3957)
+inTrain2 <- createDataPartition(y=training2$classe, p=0.7, list=FALSE)
+traintrain2 <- training2[inTrain2,]
+traintest2 <- training2[-inTrain2,]
+mod2 <- randomForest(classe ~ ., data=traintrain2)
+preds2 <- predict(mod2,newdata = traintest2)
+```
+```{r}
+kable(confusionMatrix(preds2,traintest2$classe)$table,format="html",
+      caption = "Figure 2: Confusion Matrix of physical model")
+
+oob <- data.frame("Out of Bag error"=mod2$err.rate[500,1])
+kable(oob,format="html")
+```
+
+
+
+This shows little error in prediction of the testing set sampled from the provided training set. We can use this model to predict for the testing set given for the assignment. The results are shown below.
+
+```{r}
+finalpreds <- predict(mod2,newdata = testing2)
+final <- data.frame(problemID = testing2$problem_id, predictions = finalpreds)
+```
+```{r,echo=FALSE}
+"Figure 3: Predictions for Provided testing set"
+final
+```
+
+As there was no classe variable provided in the testing set, the values for each prediction are given in order. The oob error for the 500 tree model generated is 0.55%. An out of sample error rate is hard to estimate. As suggested by Velloso et al. there are many ways that an exercise can be misperformed, so out of sample error may be high.
